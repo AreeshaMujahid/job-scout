@@ -1,0 +1,6 @@
+node_modules
+.next
+.pglite
+.pglite-verify
+.env.local
+.git

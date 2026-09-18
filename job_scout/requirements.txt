@@ -1,0 +1,44 @@
+# Job Scout.
+#
+#     pip install -r job_scout/requirements.txt
+#     playwright install chromium      # only for referral lookups
+#
+# Everything the service imports is listed here. It was not always: fastapi,
+# uvicorn and python-multipart were missing, and the only reason anything ran
+# was a virtualenv that happened to have them from somewhere else. A fresh
+# clone installed from this file and then could not start.
+
+# --- the HTTP service (job_scout/service.py) ------------------------------
+fastapi>=0.110.0         # the endpoints the web app calls
+uvicorn[standard]>=0.29.0  # the server that runs them
+python-multipart>=0.0.9  # required by FastAPI to accept an uploaded CV
+
+# --- reading and writing documents ----------------------------------------
+pymupdf>=1.24.0          # PDF text extraction AND in-place editing, as `fitz`
+pydantic>=2.0.0          # the schemas the models are held to
+
+# --- fetching jobs --------------------------------------------------------
+requests>=2.31.0         # the six job board APIs
+
+# --- the borrowed scrapers -------------------------------------------------
+# job_scout/sources/scrapers.py imports LinkedIn, Xing and Arbeitnow from
+# linkedin.py at the repository root rather than keeping a second copy of the
+# same brittle HTML parsing. That module needs this; without it those three
+# boards disappear and only the API-based ones remain.
+beautifulsoup4>=4.12.0
+
+# --- the model ------------------------------------------------------------
+# One of these two, depending on LLM_PROVIDER. Both are listed because the
+# switch is a single environment variable and a missing package turns that
+# into a crash rather than a choice.
+openai>=1.0.0            # gemini (default) -- its OpenAI-compatible endpoint
+anthropic>=0.40.0        # anthropic -- Claude
+
+# --- optional -------------------------------------------------------------
+# Imported lazily, inside the functions that need it, so the service starts
+# and everything else works without it. Only referral lookups fail.
+# Needs `playwright install chromium` as well as this line.
+playwright>=1.44.0       # drives a real browser for LinkedIn referrals
+
+# The standalone Streamlit UI (job_scout/app.py). Not needed by the web app.
+streamlit>=1.40.0

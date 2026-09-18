@@ -1,0 +1,102 @@
+# Job Scout, as four containers on one machine.
+#
+#   cp .env.docker.example .env && $EDITOR .env
+#   docker compose up -d --build
+#
+# Only `web` is published to the host. Postgres, the rating service and the
+# worker talk to each other on the compose network and are not reachable from
+# outside -- the rating service in particular drives browsers and spends model
+# budget, and has no business being on the internet.
+#
+# Put a TLS terminator (Caddy, nginx, Cloudflare) in front of `web`. The
+# inbound-mail webhook receives real people's e-mail; it must not be plain HTTP.
+
+name: jobscout
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-jobscout}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-jobscout}
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    healthcheck:
+      # The app and the worker both start by connecting, so "accepting
+      # connections" is the condition they actually need waiting for.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-jobscout} -d ${POSTGRES_DB:-jobscout}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  scout:
+    build:
+      context: .
+      dockerfile: job_scout/Dockerfile
+    restart: unless-stopped
+    environment:
+      # Required here: this service is reachable from the other containers,
+      # and an unset token means an open endpoint that spends model budget.
+      SCOUT_TOKEN: ${SCOUT_TOKEN:?set SCOUT_TOKEN in .env}
+      LLM_PROVIDER: ${LLM_PROVIDER:-gemini}
+      GEMINI_API_KEY: ${GEMINI_API_KEY:-}
+      ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request;urllib.request.urlopen('http://127.0.0.1:8000/health')\""]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+
+  web:
+    build:
+      context: ./jobscout-web
+    restart: unless-stopped
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    environment: &app-env
+      DATABASE_URL: postgres://${POSTGRES_USER:-jobscout}:${POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-jobscout}
+      # The compose network has no TLS; the certificate check would fail
+      # against a plain Postgres container.
+      DATABASE_SSL: "false"
+      SCOUT_URL: http://scout:8000
+      SCOUT_TOKEN: ${SCOUT_TOKEN}
+      APP_URL: ${APP_URL:?set APP_URL to the address people will click}
+      ENCRYPTION_KEY: ${ENCRYPTION_KEY:?set ENCRYPTION_KEY in .env}
+      INBOUND_DOMAIN: ${INBOUND_DOMAIN:-}
+      INBOUND_SECRET: ${INBOUND_SECRET:-}
+      INBOX_AUTO_APPLY: ${INBOX_AUTO_APPLY:-false}
+      INBOX_RETENTION_DAYS: ${INBOX_RETENTION_DAYS:-30}
+      WORKER_INTERVAL_SECONDS: ${WORKER_INTERVAL_SECONDS:-900}
+      GMAIL_CONNECTOR_ENABLED: ${GMAIL_CONNECTOR_ENABLED:-false}
+      GOOGLE_CLIENT_ID: ${GOOGLE_CLIENT_ID:-}
+      GOOGLE_CLIENT_SECRET: ${GOOGLE_CLIENT_SECRET:-}
+      SMTP_HOST: ${SMTP_HOST:-}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+    depends_on:
+      db:
+        condition: service_healthy
+      scout:
+        condition: service_started
+
+  worker:
+    build:
+      context: ./jobscout-web
+    restart: unless-stopped
+    # Same image, same configuration, different command. The anchor above is
+    # what keeps the two from drifting apart as settings are added.
+    environment: *app-env
+    command: ["npm", "run", "worker"]
+    depends_on:
+      db:
+        condition: service_healthy
+      scout:
+        condition: service_started
+
+volumes:
+  db-data:

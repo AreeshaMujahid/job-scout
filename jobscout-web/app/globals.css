@@ -1,0 +1,94 @@
+@import "tailwindcss";
+
+/*
+ * Colours declared in @theme become utilities: --color-brand gives bg-brand,
+ * text-brand, border-brand.
+ *
+ * One accent (indigo) for anything interactive, and four score colours that
+ * each mean exactly one thing. In a product whose job is "is this worth my
+ * evening", the score must be what catches the eye, so nothing else on the
+ * page is allowed to be colourful.
+ */
+@theme {
+  --color-ink: #0f172a;
+  --color-ink-soft: #475569;
+  --color-ink-faint: #94a3b8;
+  --color-line: #e2e8f0;
+  --color-surface: #ffffff;
+  --color-canvas: #f8fafc;
+
+  --color-brand: #1e3a8a;
+  --color-brand-soft: #eef2ff;
+  --color-brand-hover: #1b3378;
+
+  --color-strong: #15803d;
+  --color-good: #1d4ed8;
+  --color-stretch: #b45309;
+  --color-weak: #64748b;
+
+  --color-danger: #b91c1c;
+  --color-danger-soft: #fef2f2;
+}
+
+html {
+  color-scheme: light;
+}
+
+body {
+  background: var(--color-canvas);
+  color: var(--color-ink);
+  font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+/* Focus is never removed, only made to match the accent. */
+:focus-visible {
+  outline: 2px solid var(--color-brand);
+  outline-offset: 2px;
+}
+
+@layer components {
+  .card {
+    @apply rounded-xl border border-line bg-surface;
+  }
+
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm
+           font-semibold transition disabled:cursor-not-allowed disabled:opacity-50;
+  }
+
+  .btn-primary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm
+           font-semibold transition disabled:cursor-not-allowed disabled:opacity-50
+           bg-brand text-white hover:bg-brand-hover;
+  }
+
+  .btn-secondary {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm
+           font-semibold transition disabled:cursor-not-allowed disabled:opacity-50
+           border border-line bg-surface text-ink hover:bg-canvas;
+  }
+
+  .btn-danger {
+    @apply inline-flex items-center justify-center gap-2 rounded-lg px-4 py-2.5 text-sm
+           font-semibold transition disabled:cursor-not-allowed disabled:opacity-50
+           bg-danger text-white hover:opacity-90;
+  }
+
+  .field {
+    @apply w-full rounded-lg border border-line bg-surface px-3.5 py-2.5 text-sm text-ink
+           placeholder:text-ink-faint focus:border-brand focus:outline-none;
+  }
+
+  .label {
+    @apply block text-sm font-semibold text-ink;
+  }
+
+  .hint {
+    @apply mt-1 text-sm text-ink-soft;
+  }
+
+  .chip {
+    @apply inline-flex items-center rounded-full border border-line bg-canvas px-2.5 py-1
+           text-xs font-medium text-ink-soft;
+  }
+}

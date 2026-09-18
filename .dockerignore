@@ -1,0 +1,7 @@
+# The Python service image only needs job_scout/.
+jobscout-web
+.venv
+.git
+__pycache__
+*.pyc
+.pglite

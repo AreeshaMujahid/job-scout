@@ -1,0 +1,51 @@
+# --- secrets -------------------------------------------------------------
+# Real configuration never goes in. The .example files DO -- see below.
+.env
+.env.local
+.env.production
+*.key
+*.pem
+credentials.json
+token.json
+client_secret*.json
+gmail_token.json
+
+# The example files are documentation and must be published. Without this
+# negation, a broad `.env.*` rule swallows them and a fresh clone has no
+# record of which settings exist.
+!.env.example
+!.env.docker.example
+!**/.env.example
+
+# --- personal data -------------------------------------------------------
+# This project's whole subject matter is CVs. None belong in the repository.
+*.pdf
+*.docx
+master_cv.yaml
+
+# --- local databases -----------------------------------------------------
+# PGlite's development database, and the recovery copies made when one is
+# corrupted. Both contain real user rows.
+.pglite*
+*.db
+*.db.bak*
+
+# --- build output --------------------------------------------------------
+node_modules/
+.next/
+out/
+__pycache__/
+*.pyc
+.venv/
+tsconfig.tsbuildinfo
+
+# NOTE: package-lock.json is deliberately NOT ignored. `npm ci` in the
+# Dockerfile requires it, and without it committed the image cannot build
+# from a fresh clone -- and nobody gets the dependency versions this was
+# actually tested against.
+
+# --- logs and editors ----------------------------------------------------
+*.log
+.vscode/
+.idea/
+.DS_Store
