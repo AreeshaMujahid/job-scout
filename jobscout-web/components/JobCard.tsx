@@ -2,22 +2,36 @@
 
 import Link from "next/link";
 
+import { CompanyMark } from "@/components/CompanyMark";
 import { StatusButtons } from "@/components/StatusButtons";
 import type { JobView } from "@/lib/jobview";
-import { isFresh, postedAge, scoreText, VERDICT, verdictOf } from "@/lib/score";
+import { isEarly, levelOf } from "@/lib/signals";
+import { isFresh, postedAge, VERDICT, verdictOf } from "@/lib/score";
 
 /**
- * One job in a list. Shows the score and the single best reason to apply --
- * enough to decide whether to open it, and no more. The full argument is on
- * the detail page, because a list of six-bullet cases is not a list.
+ * One job in a list, laid out the way a job board lays one out.
+ *
+ * The score sits top-right in its own blue panel, because it is the only
+ * thing on the card this app produced rather than copied, and it is the
+ * reason to read one card rather than the next. Underneath the headline
+ * number are the three parts it is made of: a bare 88 is a number you either
+ * trust or you do not, while "skills 100, experience 100, industry 64" says
+ * the gap is the sector rather than you -- a different decision entirely.
+ * Those three have been stored since the first release and never shown.
+ *
+ * Everything below is quoted, not inferred. The chips are the board's own
+ * labels, and where a posting says nothing the row is absent rather than
+ * filled with "not stated" -- an empty cell is honest, an invented one is
+ * not.
+ *
+ * Kept deliberately short. A feed is a list to scan, and everything that
+ * reads rather than scans -- the skills asked for, the match count, the
+ * pitch written for this job -- is one click away on the job page, where
+ * there is room for it. What stays here is what decides whether to click:
+ * who, where, how senior, how well it scores and why.
  *
  * A client component so the feed (server-rendered from Postgres) and the
- * search results (held in client state after a fetch) can both use it.
- *
- * Laid out as a job-board card: accent edge, a company monogram, and the
- * facts on one icon-led line. The score keeps the top-right corner, which on
- * an ordinary board holds the company logo -- here the fit score is the
- * reason to look at one card over another, so it takes the strongest spot.
+ * search results (client state after a fetch) can both use it.
  */
 
 /** Country flag for a location string, or "" when nothing matches.
@@ -49,111 +63,38 @@ function flagFor(location: string): string {
   return "";
 }
 
-/** Which board a job was found on, as its own badge rather than a plain grey
- *  chip lost among skill tags -- "where did this come from" is orientation
- *  info worth seeing before the reader even reads the title.
- *
- *  One colour per board, all eight this app can actually return (see
- *  SCRAPER_BOARDS and BOARDS in job_scout/sources/boards.py) -- picked for
- *  contrast against each other, not sampled from any board's real branding,
- *  so this never gets into reproducing someone else's logo colours. Falls
- *  back to a neutral grey for anything not in the list, so a new board added
- *  later never renders unstyled. */
-const SOURCE_COLORS: Record<string, string> = {
-  LinkedIn: "bg-[#0A66C2]/10 text-[#0A66C2]",
-  Xing: "bg-[#00805F]/10 text-[#00805F]",
-  Arbeitnow: "bg-[#EA580C]/10 text-[#EA580C]",
-  Remotive: "bg-[#7C3AED]/10 text-[#7C3AED]",
-  RemoteOK: "bg-[#334155]/10 text-[#334155]",
-  Jobicy: "bg-[#2563EB]/10 text-[#2563EB]",
-  "The Muse": "bg-[#DC2626]/10 text-[#DC2626]",
-  Himalayas: "bg-[#CA8A04]/10 text-[#CA8A04]",
-};
-const DEFAULT_SOURCE_COLOR = "bg-ink-faint/10 text-ink-soft";
-
-function sourceColor(source: string): string {
-  return SOURCE_COLORS[source] ?? DEFAULT_SOURCE_COLOR;
-}
-
-/** Company monogram. Skips the legal-form noise ("GmbH", "Ltd") that would
- *  otherwise make half the cards read "G" or "L". */
-function monogram(company: string): string {
-  const words = company
-    .replace(/[^\p{L}\p{N}\s]/gu, " ")
-    .split(/\s+/)
-    .filter(Boolean)
-    .filter((w) => !/^(gmbh|ag|ltd|limited|inc|llc|plc|bv|nv|sa|se|co|group|holding|the)$/i.test(w));
-  const source = words.length ? words : company.split(/\s+/).filter(Boolean);
-  return source.slice(0, 2).map((w) => w[0]?.toUpperCase() ?? "").join("") || "?";
-}
-
-/* Inline SVGs rather than an icon package: three glyphs do not justify a
-   dependency, and these inherit currentColor so they follow the text. */
-const ICON = "h-3.5 w-3.5 shrink-0";
+/* Inline SVGs rather than an icon package: a handful of glyphs do not justify
+   a dependency, and these inherit currentColor so they follow the text. */
+const ICON = "h-4 w-4 shrink-0 text-ink-faint";
 
 function PinIcon() {
   return (
-    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <path d="M20 10c0 6-8 12-8 12s-8-6-8-12a8 8 0 1 1 16 0Z" strokeLinecap="round" strokeLinejoin="round" />
       <circle cx="12" cy="10" r="3" />
     </svg>
   );
 }
 
-function BuildingIcon() {
+function HomeIcon() {
   return (
-    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <path d="M3 21h18M5 21V5a2 2 0 0 1 2-2h6a2 2 0 0 1 2 2v16M15 21V9h2a2 2 0 0 1 2 2v10" strokeLinecap="round" strokeLinejoin="round" />
-      <path d="M9 7h2M9 11h2M9 15h2" strokeLinecap="round" />
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M3 10.5 12 3l9 7.5V20a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1v-9.5Z" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
 
-function ClockIcon() {
+function LevelIcon() {
   return (
-    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
-      <circle cx="12" cy="12" r="9" />
-      <path d="M12 7v5l3 2" strokeLinecap="round" strokeLinejoin="round" />
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <path d="M4 20V10M10 20V4M16 20v-7M22 20H2" strokeLinecap="round" strokeLinejoin="round" />
     </svg>
   );
 }
-
-/** Recognisable marks for the two boards asked for by name: a coloured
- *  rounded square with the platform's own initial, the same treatment
- *  "Sign in with LinkedIn" buttons use everywhere on the web -- built as
- *  plain shapes in each platform's real brand colour, not a traced copy of
- *  an official logo file, and used here only to say where a listing came
- *  from. Every other board keeps the plain coloured-text pill below. */
-function LinkedInMark() {
-  return (
-    <svg className="h-4 w-4 shrink-0 rounded-[3px]" viewBox="0 0 24 24" aria-hidden="true">
-      <rect width="24" height="24" rx="4" fill="#0A66C2" />
-      <text x="12" y="16.5" textAnchor="middle" fontSize="12" fontWeight="700" fontFamily="Arial, Helvetica, sans-serif" fill="#fff">
-        in
-      </text>
-    </svg>
-  );
-}
-
-function XingMark() {
-  return (
-    <svg className="h-4 w-4 shrink-0 rounded-[3px]" viewBox="0 0 24 24" aria-hidden="true">
-      <rect width="24" height="24" rx="4" fill="#00805F" />
-      <text x="12" y="16.5" textAnchor="middle" fontSize="13" fontWeight="700" fontFamily="Arial, Helvetica, sans-serif" fill="#fff">
-        X
-      </text>
-    </svg>
-  );
-}
-
-const SOURCE_ICONS: Partial<Record<string, typeof LinkedInMark>> = {
-  LinkedIn: LinkedInMark,
-  Xing: XingMark,
-};
 
 function WalletIcon() {
   return (
-    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true">
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
       <rect x="3" y="6" width="18" height="13" rx="2" />
       <path d="M3 10h18" strokeLinecap="round" />
       <circle cx="16.5" cy="14.5" r="1.2" fill="currentColor" stroke="none" />
@@ -161,133 +102,214 @@ function WalletIcon() {
   );
 }
 
+function CalendarIcon() {
+  return (
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <rect x="3" y="5" width="18" height="16" rx="2" />
+      <path d="M3 10h18M8 3v4M16 3v4" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+function SourceIcon() {
+  return (
+    <svg className={ICON} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true">
+      <circle cx="12" cy="12" r="9" />
+      <path d="M3 12h18M12 3c2.6 2.8 2.6 15.2 0 18M12 3c-2.6 2.8-2.6 15.2 0 18" strokeLinecap="round" />
+    </svg>
+  );
+}
+
+/** The tracker state, phrased for a card rather than a button. */
+const TRACKER_WORDS: Record<string, string> = {
+  saved: "Saved",
+  applied: "Applied",
+  interviewing: "Interviewing",
+  offer: "Offer",
+  rejected: "Rejected",
+  dismissed: "Not interested",
+};
+
+/**
+ * One fact, with its glyph.
+ *
+ * Renders nothing at all when there is no fact, rather than "not stated".
+ * These flow rather than sit in fixed cells, so a posting with no salary
+ * closes up instead of leaving a hole. The icons are the labels, and a row
+ * of them reads as one sentence about the job.
+ */
+function Fact({ icon, children }: { icon: React.ReactNode; children?: React.ReactNode }) {
+  if (!children) return null;
+  return (
+    <span className="flex min-w-0 items-center gap-2 text-sm text-ink">
+      {icon}
+      <span className="truncate">{children}</span>
+    </span>
+  );
+}
+
+/**
+ * One part of the score, as a labelled row.
+ *
+ * The number is the point, so it is the heaviest thing in the row and sits
+ * hard right where the eye can run down all three. Tabular figures keep 69
+ * and 100 in the same column.
+ */
+function Part({ label, value }: { label: string; value: number }) {
+  return (
+    <div className="flex items-baseline justify-between gap-3">
+      <span className="truncate text-sm text-ink-soft">{label}</span>
+      <span className="shrink-0 text-base font-bold tabular-nums text-ink">
+        {value}
+        <span className="text-xs font-semibold text-ink-soft">%</span>
+      </span>
+    </div>
+  );
+}
+
 export function JobCard({ item }: { item: JobView }) {
-  const verdict = VERDICT[verdictOf(item.verdict)];
+  const key = verdictOf(item.verdict);
+  const verdict = VERDICT[key];
   const age = postedAge(item.postedAt);
   const flag = flagFor(item.location);
-  const SourceMark = SOURCE_ICONS[item.source];
 
   return (
-    <article className="card group border-l-4 border-l-brand p-5 transition hover:border-ink-faint hover:border-l-brand hover:shadow-sm">
-      {/* Badge row, kept above the title so the eye meets freshness first --
-          the same reason a board leads with "New". */}
-      <div className="flex items-start justify-between gap-4">
-        <div className="flex flex-wrap items-center gap-2">
-          <span
-            className={`inline-flex items-center gap-1.5 rounded-full py-0.5 pr-2.5 text-xs font-semibold ${sourceColor(item.source)} ${SourceMark ? "pl-0.5" : "pl-2.5"}`}
-          >
-            {SourceMark && <SourceMark />}
-            {item.source}
-          </span>
-          {isFresh(item.postedAt) && (
-            <span className="inline-flex items-center gap-1 rounded-full bg-brand-soft px-2.5 py-0.5 text-xs font-semibold text-brand">
-              <span aria-hidden="true">✦</span> New
-            </span>
-          )}
-          {item.remote && (
-            <span className="inline-flex items-center rounded-full bg-strong/10 px-2.5 py-0.5 text-xs font-semibold text-strong">
-              Remote
-            </span>
-          )}
-        </div>
-
-        <div className="shrink-0 text-right">
-          <div className={`text-3xl font-bold leading-none ${scoreText(item.score)}`}>
-            {item.score}
-          </div>
-          <div className={`mt-1 text-xs font-semibold ${verdict.text}`}>{verdict.label}</div>
-        </div>
-      </div>
-
-      <div className="mt-3 flex items-start gap-3">
-        <div
-          className="flex h-11 w-11 shrink-0 items-center justify-center rounded-lg bg-brand-soft text-sm font-bold text-brand"
-          aria-hidden="true"
-        >
-          {monogram(item.company)}
-        </div>
-
+    <article className="card group overflow-hidden p-5 transition hover:shadow-md">
+      {/* -------------------------------------------- header + the score */}
+      <div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+        {/* The posting. The facts sit in this column rather than below the
+            row: the score panel is much taller than a title, so a facts row
+            placed after the row began beneath the panel and left a hole in
+            the left column exactly as tall as the panel. */}
         <div className="min-w-0 flex-1">
-          <h3 className="truncate text-base font-semibold sm:text-lg">
-            <Link href={`/jobs/${item.id}`} className="transition group-hover:text-brand hover:underline">
-              {item.title}
-            </Link>
-          </h3>
+          <div className="flex items-start gap-3">
+            <CompanyMark company={item.company} logoUrl={item.logoUrl} />
 
-          {/* The company name links to the employer's own page when the
-              listing gave one. Opens in a new tab and carries rel=noreferrer:
-              this is an outbound link to a third party, and the reader is
-              mid-triage on a list they will come back to. */}
-          <p className="mt-1 flex items-center gap-1.5 truncate text-sm font-medium text-ink">
-            <BuildingIcon />
-            {item.companyUrl ? (
-              <a
-                href={item.companyUrl}
-                target="_blank"
-                rel="noopener noreferrer"
-                className="truncate hover:text-brand hover:underline"
-                title={`${item.company} on ${item.source}`}
-              >
-                {item.company}
-              </a>
-            ) : (
-              <span className="truncate">{item.company}</span>
-            )}
-          </p>
+            <div className="min-w-0">
+              <p className="flex flex-wrap items-center gap-x-2 gap-y-1 text-sm">
+                {item.companyUrl ? (
+                  <a
+                    href={item.companyUrl}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    className="font-semibold text-ink hover:text-brand hover:underline"
+                  >
+                    {item.company}
+                  </a>
+                ) : (
+                  <span className="font-semibold text-ink">{item.company}</span>
+                )}
+                {age && (
+                  <>
+                    <span className="text-ink-faint" aria-hidden="true">
+                      ·
+                    </span>
+                    <span className="text-ink-soft">{age}</span>
+                  </>
+                )}
+                {isEarly(item.postedAt) ? (
+                  <span className="rounded-md bg-match-tint px-2 py-0.5 text-xs font-semibold text-match-ink">
+                    Early applicant
+                  </span>
+                ) : (
+                  isFresh(item.postedAt) && (
+                    <span className="rounded-md bg-brand-soft px-2 py-0.5 text-xs font-semibold text-brand">
+                      New
+                    </span>
+                  )
+                )}
+                {item.status && (
+                  <span className="rounded-md border border-line px-2 py-0.5 text-xs font-semibold text-ink-soft">
+                    {TRACKER_WORDS[item.status] ?? item.status}
+                  </span>
+                )}
+              </p>
 
-          {/* One line of facts, each led by its own glyph. Wraps rather than
-              truncates: a salary is worth a second line, and a card that hides
-              it is a card you have to open to rule out. */}
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-4 gap-y-1 text-sm text-ink-soft">
-            <span className="inline-flex items-center gap-1.5">
-              <PinIcon />
-              {item.location || "location not stated"}
-              {flag && <span aria-hidden="true">{flag}</span>}
+              <h3 className="mt-1 text-xl font-bold tracking-tight">
+                <Link href={`/jobs/${item.id}`} className="transition group-hover:text-brand hover:underline">
+                  {item.title}
+                </Link>
+              </h3>
+            </div>
+          </div>
+
+        {/* ---------------------------------------------------------- facts */}
+        <div className="mt-4 flex flex-wrap items-center gap-x-6 gap-y-2">
+          <Fact icon={<PinIcon />}>
+            {item.location ? (
+              <>
+                {item.location}
+                {flag && <span aria-hidden="true"> {flag}</span>}
+              </>
+            ) : null}
+          </Fact>
+          <Fact icon={<HomeIcon />}>{item.remote ? "Remote" : "Onsite"}</Fact>
+          <Fact icon={<LevelIcon />}>{levelOf(item.title)}</Fact>
+          <Fact icon={<CalendarIcon />}>
+            {item.yearsRequired !== null ? `${item.yearsRequired}+ years exp` : null}
+          </Fact>
+          <Fact icon={<WalletIcon />}>{item.salary || null}</Fact>
+          <Fact icon={<SourceIcon />}>{item.source}</Fact>
+        </div>
+        </div>
+
+        {/* The match panel. Headline and verdict on the deeper tint, the
+            three parts beneath on the lighter one -- one blue family, so it
+            reads as a single object rather than two stacked boxes. */}
+        <div className="w-full shrink-0 overflow-hidden rounded-xl bg-match-soft sm:w-72">
+          <div className="flex items-center justify-between gap-3 bg-match-tint px-4 py-3">
+            <span className="text-3xl font-extrabold leading-none tabular-nums text-ink">
+              {item.score}
+              <span className="text-base font-bold">%</span>
             </span>
-
-            {item.salary && (
-              <span className="inline-flex items-center gap-1.5">
-                <WalletIcon />
-                {item.salary}
-              </span>
-            )}
-
-            {age && (
-              <span className="inline-flex items-center gap-1.5 text-brand">
-                <ClockIcon />
-                {age}
-              </span>
-            )}
+            <span className="text-right text-xs font-bold uppercase tracking-wide text-match-ink">
+              {verdict.label}
+            </span>
+          </div>
+          <div className="space-y-1.5 px-4 py-3">
+            <Part label="Experience Level" value={item.experienceMatch} />
+            <Part label="Skill" value={item.skillsMatch} />
+            <Part label="Industry Exp." value={item.domainMatch} />
           </div>
         </div>
       </div>
 
-      {item.whyPick[0] && (
-        <p className="mt-4 line-clamp-2 text-sm leading-relaxed text-ink-soft">
-          <span className="font-semibold text-ink">Why: </span>
-          {item.whyPick[0]}
-        </p>
-      )}
-
-      {item.missingSkills.length > 0 && (
-        <div className="mt-3 flex flex-wrap items-center gap-1.5">
-          <span className="text-xs font-semibold text-ink-faint">Missing:</span>
-          {item.missingSkills.slice(0, 4).map((skill) => (
-            <span key={skill} className="chip">
-              {skill}
+      {/* ---------------------------------------------------------- tags */}
+      {item.tags.length > 0 && (
+        <div className="mt-4 flex flex-wrap gap-1.5">
+          {item.tags.slice(0, 6).map((tag) => (
+            <span
+              key={tag}
+              className="rounded-md bg-match-soft px-2.5 py-1 text-xs font-medium text-match-ink"
+            >
+              {tag}
             </span>
           ))}
         </div>
       )}
 
-      <div className="mt-5 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
-        <StatusButtons jobId={item.id} current={item.status} size="small" />
-        <Link
-          href={`/jobs/${item.id}`}
-          className="text-sm font-semibold text-brand hover:underline"
-        >
+      {/* ------------------------------------ what the posting says it does */}
+      {item.sponsorship !== null && (
+        <div className="mt-3 flex flex-wrap items-center gap-x-3 gap-y-2 text-xs">
+          {item.sponsorship === "offers" && (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-match-tint px-2.5 py-1 font-semibold text-match-ink">
+              <span aria-hidden="true">✓</span> Sponsorship likely
+            </span>
+          )}
+          {item.sponsorship === "refuses" && (
+            <span className="inline-flex items-center gap-1.5 rounded-md bg-canvas px-2.5 py-1 font-semibold text-ink-soft">
+              <span aria-hidden="true">✕</span> No sponsorship
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* -------------------------------------------------------- actions */}
+      <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-line pt-4">
+        <Link href={`/jobs/${item.id}`} className="text-sm font-semibold text-brand hover:underline">
           See the full match →
         </Link>
+        <StatusButtons jobId={item.id} current={item.status} size="small" />
       </div>
     </article>
   );

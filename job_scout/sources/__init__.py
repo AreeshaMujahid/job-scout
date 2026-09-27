@@ -7,7 +7,8 @@ from typing import Dict, List, Sequence, Tuple
 
 from ..models import Job
 from ._common import location_ok, relevance
-from .boards import BOARDS
+from . import filters
+from .boards import BOARDS, NOTES
 
 __all__ = ["BOARDS", "FetchReport", "fetch_all"]
 
@@ -22,6 +23,10 @@ class FetchReport:
     duplicates: int = 0
     off_topic: int = 0
     wrong_location: int = 0
+    # Keyed by reason -- "stale", "underpaid", "blocked", "no_sponsorship" --
+    # so the caller can name the filter that emptied a search rather than
+    # reporting one opaque total.
+    rejected: Dict[str, int] = field(default_factory=dict)
 
     @property
     def total_fetched(self) -> int:
@@ -36,6 +41,10 @@ def fetch_all(
     boards: Sequence[str] | None = None,
     min_relevance: int = 2,
     limit: int = 60,
+    max_age_days: int | None = None,
+    min_salary: int | None = None,
+    blocked_companies: Sequence[str] = (),
+    needs_sponsorship: bool = False,
 ) -> Tuple[List[Job], FetchReport]:
     """Fetch from every selected board and return the jobs worth rating.
 
@@ -44,12 +53,20 @@ def fetch_all(
     """
     chosen = [name for name in (boards or BOARDS) if name in BOARDS]
     report = FetchReport()
+    # Notes are per-run, not cumulative: a board that was challenged last
+    # time and sailed through this time must not still be complaining.
+    for name in chosen:
+        NOTES.pop(name, None)
 
     # A remote-only search has nothing to gain from boards that are not
     # remote-first, but they still carry remote listings, so they stay in.
     with ThreadPoolExecutor(max_workers=len(chosen) or 1) as pool:
         futures = {
-            name: pool.submit(BOARDS[name][0], queries, limit) for name in chosen
+            # Location goes to the boards, not just to the filter that runs
+            # afterwards. Three of them can search by place, and were being
+            # asked for the whole country and then filtered.
+            name: pool.submit(BOARDS[name][0], queries, limit, location)
+            for name in chosen
         }
         raw: List[Job] = []
         for name, future in futures.items():
@@ -61,6 +78,11 @@ def fetch_all(
                 continue
             report.fetched[name] = len(found)
             raw.extend(found)
+            # Something the person should hear about, even though the board
+            # did not fail outright -- a human check left unticked, say.
+            note = NOTES.pop(name, "")
+            if note:
+                report.errors[name] = note
 
     seen: set[str] = set()
     kept: List[Job] = []
@@ -76,6 +98,21 @@ def fetch_all(
 
         if not location_ok(job.location, job.remote, location, remote_only):
             report.wrong_location += 1
+            continue
+
+        # Filters the boards cannot apply themselves -- age, pay, employers
+        # the user is done with, and postings that say outright they will not
+        # sponsor. Each counted separately so an empty search can say which
+        # one emptied it.
+        rejected = filters.keep(
+            job,
+            max_age_days=max_age_days,
+            min_salary=min_salary,
+            blocked_companies=blocked_companies,
+            needs_sponsorship=needs_sponsorship,
+        )
+        if rejected:
+            report.rejected[rejected] = report.rejected.get(rejected, 0) + 1
             continue
 
         if job.key in seen:

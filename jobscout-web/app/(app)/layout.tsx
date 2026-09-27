@@ -16,12 +16,16 @@ export default async function AppLayout({ children }: { children: React.ReactNod
   return (
     <div className="min-h-screen">
       <header className="border-b border-line bg-surface">
-        <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-4">
+        {/* flex-wrap, because the row could not fit a phone: four nav links,
+            a wordmark and a sign-out button came to 408px inside 375, and the
+            whole page scrolled sideways as a result. Wrapping costs a second
+            line on a narrow screen and nothing at all on a wide one. */}
+        <div className="mx-auto flex max-w-6xl flex-wrap items-center gap-x-6 gap-y-2 px-6 py-4">
           <Link href="/feed" className="text-lg font-bold tracking-tight">
             Job Scout
           </Link>
 
-          <nav className="flex items-center gap-1">
+          <nav className="flex flex-wrap items-center gap-1">
             <NavLink href="/find">Find jobs</NavLink>
             <NavLink href="/feed">Feed</NavLink>
             <NavLink href="/tracker">Tracker</NavLink>

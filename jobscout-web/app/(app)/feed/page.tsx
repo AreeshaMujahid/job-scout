@@ -1,11 +1,12 @@
 import Link from "next/link";
-import { and, desc, eq, gte, ne, or, isNull, sql } from "drizzle-orm";
+import { and, desc, eq, isNull, ne, or, sql } from "drizzle-orm";
 
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
 import { jobStatus, jobs, ratings } from "@/lib/db/schema";
 import { JobCard } from "@/components/JobCard";
 import { toJobView } from "@/lib/jobview";
+import { DEFAULT_WINDOW, WINDOWS, feedWhere } from "@/lib/feed/window";
 
 const FILTERS = [
   { value: "0", label: "Everything" },
@@ -14,27 +15,16 @@ const FILTERS = [
   { value: "80", label: "Strong only" },
 ];
 
+
 /**
- * How far back the feed reaches, newest first, defaulting to a day.
+ * How many jobs a page of the feed holds.
  *
- * Every run adds another batch of scored jobs and none of them leave, so the
- * feed grows without limit -- thirty of them is already more scrolling than
- * anyone does. A day is the useful window: what today's search turned up.
- *
- * Measured on ratings.ratedAt -- when a job entered THIS user's feed -- not
- * on the board's own "posted" field, which arrives as free text ("yesterday",
- * "2 days ago", sometimes nothing) and cannot be compared to a date.
+ * Five was set when a card was tall enough to fill a screen on its own. The
+ * card is 266px now -- the skills, the pitch and the match count all moved
+ * to the job page -- so five leaves most of the screen empty and turns
+ * reading a run into clicking through pages of it.
  */
-const WINDOWS = [
-  { value: "24h", label: "Last 24 hours", hours: 24 },
-  { value: "7d", label: "Last 7 days", hours: 24 * 7 },
-  { value: "all", label: "All time", hours: null },
-] as const;
-
-const DEFAULT_WINDOW = "24h";
-
-/** Enough to read in one screen; the rest is a click away. */
-const PER_PAGE = 5;
+const PER_PAGE = 10;
 
 export default async function FeedPage({ searchParams }: PageProps<"/feed">) {
   const user = await requireUser();
@@ -47,21 +37,15 @@ export default async function FeedPage({ searchParams }: PageProps<"/feed">) {
 
   const db = await getDb();
 
-  const where = (hours: number | null) =>
-    and(
-      eq(ratings.userId, user.id),
-      gte(ratings.score, minScore),
-      // Jobs you said were not for you leave the feed, but stay in the
-      // database so a later run does not pay to score them again.
-      or(isNull(jobStatus.status), ne(jobStatus.status, "dismissed")),
-      // "Now" comes from the database, not from this process: one clock
-      // for a comparison against a column the same database wrote, and
-      // no impure read during render.
-      hours === null
-        ? undefined
-        : sql`${ratings.ratedAt} >= now() - make_interval(hours => ${hours})`,
-      board ? eq(jobs.source, board) : undefined,
-    );
+  const where = (hours: number | null, useRun = false) =>
+    feedWhere({
+      userId: user.id,
+      minScore,
+      lastRunId: user.profile?.lastRunId ?? null,
+      useRun,
+      hours,
+      board,
+    });
 
   const base = () =>
     db
@@ -73,7 +57,7 @@ export default async function FeedPage({ searchParams }: PageProps<"/feed">) {
         and(eq(jobStatus.jobId, ratings.jobId), eq(jobStatus.userId, user.id)),
       );
 
-  const countIn = async (hours: number | null) => {
+  const countIn = async (hours: number | null, useRun = false) => {
     const [row] = await db
       .select({ total: sql<number>`count(*)::int` })
       .from(ratings)
@@ -82,20 +66,26 @@ export default async function FeedPage({ searchParams }: PageProps<"/feed">) {
         jobStatus,
         and(eq(jobStatus.jobId, ratings.jobId), eq(jobStatus.userId, user.id)),
       )
-      .where(where(hours));
+      .where(where(hours, useRun));
     return row?.total ?? 0;
   };
 
   // Someone coming back after a few days would otherwise be met by an empty
   // feed and conclude their jobs were lost. The default widens itself rather
   // than showing nothing; an explicitly chosen window is left alone.
+  let useRun = chosen.value === "run";
   let hours = chosen.hours;
-  let total = await countIn(hours);
+  let total = await countIn(hours, useRun);
   let widened = false;
   if (total === 0 && usingDefault) {
-    const everything = await countIn(null);
+    // Widening drops the run filter as well as the time window. Keeping it
+    // would mean falling back to "all time" and still showing nothing, which
+    // is exactly the empty feed this fallback exists to prevent -- someone
+    // whose last run found nothing new should still see what they have.
+    const everything = await countIn(null, false);
     if (everything > 0) {
       hours = null;
+      useRun = false;
       total = everything;
       widened = true;
     }
@@ -109,7 +99,7 @@ export default async function FeedPage({ searchParams }: PageProps<"/feed">) {
   // fetching everything and slicing keeps it the same cost at 30 jobs and
   // at 3,000.
   const rows = await base()
-    .where(where(hours))
+    .where(where(hours, useRun))
     .orderBy(desc(ratings.score))
     .limit(PER_PAGE)
     .offset((current - 1) * PER_PAGE);

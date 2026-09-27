@@ -26,6 +26,15 @@
   --color-stretch: #b45309;
   --color-weak: #64748b;
 
+  /* The match panel on a job card. One blue family at four weights, so the
+     panel, its chips and its dividers read as one object rather than four
+     borrowed greys -- and so it sits inside the app's own brand blue rather
+     than beside it. */
+  --color-match-soft: #eff6ff;
+  --color-match-tint: #dbeafe;
+  --color-match-line: #bfdbfe;
+  --color-match-ink: #1e40af;
+
   --color-danger: #b91c1c;
   --color-danger-soft: #fef2f2;
 }

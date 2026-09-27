@@ -139,4 +139,17 @@ def answer_application_question(
 
     sections += ["", "Write your next reply."]
 
-    return structured(ApplicationAnswer, _SYSTEM, "\n".join(sections), max_tokens=4000)
+    # 900 tokens, not 4000: an answer to a form question is a paragraph or
+    # two, and a wider window only gives the model room to wander.
+    #
+    # 25 seconds, because somebody is watching a spinner. A rate-limited turn
+    # otherwise backs off 20s then 40s -- measured at 82 seconds end to end --
+    # and "the model is rate limited" at twenty-five is far more use than a
+    # spinner that might clear at ninety.
+    return structured(
+        ApplicationAnswer,
+        _SYSTEM,
+        "\n".join(sections),
+        max_tokens=900,
+        deadline=25.0,
+    )

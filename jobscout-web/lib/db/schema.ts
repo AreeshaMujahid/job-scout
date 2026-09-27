@@ -128,11 +128,33 @@ export const profiles = pgTable("profiles", {
 
   // Last used search settings, so Find jobs opens where you left it.
   // searchMaxYears null means "do not cap" -- the toggle in the UI.
-  searchBoard: text("search_board").notNull().default("LinkedIn"),
+  // StepStone, not LinkedIn: the default has to be a source every account
+  // is allowed to use, and it is the better one anyway -- measured, 49
+  // unseen jobs against LinkedIn's 1 on the same search.
+  searchBoard: text("search_board").notNull().default("StepStone"),
+  /**
+   * Every source a run should query, not one of them.
+   *
+   * Empty means "fall back to searchBoard", which is what every profile held
+   * before a run could span sources -- see sourcesOf() in lib/boards.ts. The
+   * old column stays rather than being migrated in place so that a rollback
+   * does not strand anyone on a source they never picked.
+   */
+  searchBoards: jsonb("search_boards").$type<string[]>().notNull().default([]),
+  /**
+   * How many new postings one run will pay to score.
+   *
+   * A setting rather than a constant because the right number depends on the
+   * run: thirty is a sensible weekday check, and someone opening a week's
+   * window across four boards wants more than that in one go.
+   */
+  searchLimit: integer("search_limit").notNull().default(30),
   searchPages: integer("search_pages").notNull().default(3),
   searchHours: integer("search_hours").notNull().default(24),
   searchLevels: jsonb("search_levels").$type<string[]>().notNull().default(["Entry level", "Associate"]),
   searchMaxYears: integer("search_max_years"),
+  /** The most recent search run, so the feed knows which one is "current". */
+  lastRunId: text("last_run_id"),
 
   updatedAt: timestamp("updated_at", { withTimezone: true }).notNull().defaultNow(),
 });
@@ -155,6 +177,17 @@ export const jobs = pgTable("jobs", {
   postedAt: text("posted_at").notNull().default(""),
   /** The employer's own page on the board, when the listing links to one. */
   companyUrl: text("company_url").notNull().default(""),
+  /**
+   * The employer's logo, when the board sent one.
+   *
+   * Empty for most postings: LinkedIn, Xing and StepStone hand over no logo,
+   * and the company_url they do give is the employer's page ON THAT BOARD
+   * ("linkedin.com/company/holidu"), so a favicon taken from it would put
+   * LinkedIn's own logo on every card. Nothing here guesses a domain from a
+   * company name either -- showing a different company's logo is worse than
+   * showing none.
+   */
+  logoUrl: text("logo_url").notNull().default(""),
   remote: boolean("remote").notNull().default(false),
   tags: jsonb("tags").$type<string[]>().notNull().default([]),
   firstSeen: timestamp("first_seen", { withTimezone: true }).notNull().defaultNow(),
@@ -215,6 +248,15 @@ export const ratings = pgTable(
       .notNull()
       .default([]),
     referralsAt: timestamp("referrals_at", { withTimezone: true }),
+    /**
+     * The search run that produced this rating.
+     *
+     * Runs are what a person actually thinks in -- "the jobs I just found"
+     * -- and without an id for them two searches an hour apart mix into one
+     * undifferentiated list. Null for every rating made before runs existed,
+     * which the feed treats as belonging to no current run.
+     */
+    runId: text("run_id"),
     ratedAt: timestamp("rated_at", { withTimezone: true }).notNull().defaultNow(),
   },
   (table) => [
@@ -227,6 +269,48 @@ export const JOB_STATUSES = ["saved", "applied", "interviewing", "offer", "rejec
 export type JobStatus = (typeof JOB_STATUSES)[number];
 
 /** The tracker: what the user did about a job, and when. */
+/**
+ * One press of Fetch jobs, and how far it has got.
+ *
+ * A run takes minutes -- most of it waiting on the model, which is paced to
+ * stay inside a rate limit -- and it used to happen inside the form
+ * submission. That meant a blank button for seven minutes, nothing to show
+ * for it if you navigated away, and an HTTP timeout waiting at the end of
+ * the longer ones.
+ *
+ * Writing the run down instead makes it a thing with a state that any page
+ * can ask about. The postings it scores are ordinary ratings carrying this
+ * run's id, so "what has it found so far" needs no extra storage: it is the
+ * same query the feed already runs, asked while the run is still going.
+ */
+export const RUN_STATES = ["running", "done", "error"] as const;
+export type RunState = (typeof RUN_STATES)[number];
+
+export const runs = pgTable(
+  "runs",
+  {
+    id: text("id").primaryKey(),
+    userId: text("user_id")
+      .notNull()
+      .references(() => users.id, { onDelete: "cascade" }),
+    status: text("status").$type<RunState>().notNull().default("running"),
+    /** What the run is doing now, or what it found when it finished. */
+    message: text("message").notNull().default(""),
+    hint: text("hint").notNull().default(""),
+    stats: jsonb("stats").$type<{ label: string; value: number }[]>().notNull().default([]),
+    /** How many postings it means to score, and how many it has scored. */
+    target: integer("target").notNull().default(0),
+    scored: integer("scored").notNull().default(0),
+    /** Postings this run re-found that an earlier one had already scored. */
+    rediscovered: integer("rediscovered").notNull().default(0),
+    startedAt: timestamp("started_at", { withTimezone: true }).notNull().defaultNow(),
+    finishedAt: timestamp("finished_at", { withTimezone: true }),
+  },
+  (table) => [index("runs_user_idx").on(table.userId, table.startedAt)],
+);
+
+export type Run = typeof runs.$inferSelect;
+
 export const jobStatus = pgTable(
   "job_status",
   {

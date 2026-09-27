@@ -9,7 +9,7 @@
     "lint": "eslint",
     "worker": "tsx worker/index.ts",
     "migrate": "tsx scripts/migrate.ts",
-    "check": "tsx scripts/check-inbox.ts && tsx scripts/check-sync.ts && tsx scripts/check-auth.ts"
+    "check": "tsx scripts/check-inbox.ts && tsx scripts/check-sync.ts && tsx scripts/check-auth.ts && tsx scripts/check-runs.ts && tsx scripts/check-sources.ts && tsx scripts/check-posting.ts && tsx scripts/check-sharing.ts"
   },
   "dependencies": {
     "@electric-sql/pglite": "^0.5.8",

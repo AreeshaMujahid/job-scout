@@ -121,6 +121,20 @@ def fallback_model() -> str | None:
     return os.getenv("GEMINI_FALLBACK_MODEL", "gemini-flash-lite-latest")
 
 
+def key_present() -> bool:
+    """Is the key this provider needs actually set?
+
+    Separate from _get_client() because health has to answer the question
+    without constructing a client or making a call: a service that reports
+    itself up while it cannot reach a model is worse than one that is plainly
+    down, because the thing watching it stops looking.
+    """
+    config.load_env()
+    if provider() == "anthropic":
+        return bool(os.getenv("ANTHROPIC_API_KEY"))
+    return bool(os.getenv("GEMINI_API_KEY"))
+
+
 def _get_client():
     global _client, _client_kind
     kind = provider()
@@ -159,19 +173,37 @@ def structured(
     *,
     max_tokens: int = 8000,
     attempts: int = 3,
+    deadline: float | None = None,
 ) -> T:
     """Ask for one object shaped like `schema`, and return it validated.
 
     A malformed reply is retried like a network failure: the models here
     occasionally truncate a long JSON array, and one more try is far cheaper
     than dropping a whole batch of jobs from the results.
+
+    `deadline` is a wall-clock budget in seconds, for callers with a person
+    waiting on the other end. Without one this will keep retrying through a
+    rate limit for well over a minute -- measured: "say hello" took 77
+    seconds and nine 429s on an exhausted free tier. That is the right
+    behaviour for a background batch and the wrong one for a chat box, where
+    a clear "the model is rate limited" at twenty seconds beats a spinner
+    that might clear at ninety.
     """
     last: Exception | None = None
     primary = model_name()
+    started = time.monotonic()
+
+    def out_of_time() -> bool:
+        return deadline is not None and (time.monotonic() - started) >= deadline
 
     for attempt in range(attempts):
+        if out_of_time():
+            break
         try:
-            return _call_once(schema, system, user, max_tokens, primary)
+            remaining = None if deadline is None else max(
+                1.0, deadline - (time.monotonic() - started)
+            )
+            return _call_once(schema, system, user, max_tokens, primary, remaining)
         except (ValidationError, ValueError) as exc:
             last = exc
         except Exception as exc:  # provider SDK errors are not a shared base class
@@ -179,13 +211,27 @@ def structured(
                 raise LLMError(f"{type(exc).__name__}: {exc}") from exc
             last = exc
 
-        if attempt < attempts - 1:
-            time.sleep(_sleep_for(last, attempt))
+        if attempt < attempts - 1 and not out_of_time():
+            pause = _sleep_for(last, attempt)
+            if deadline is not None:
+                # Never sleep past the budget. A rate-limit backoff doubles --
+                # 20s, then 40s -- so without this a call given 25 seconds
+                # spent 64 of them asleep, which is how the chat box came to
+                # sit there for over a minute.
+                pause = min(pause, max(0.0, deadline - (time.monotonic() - started)))
+            if pause > 0:
+                time.sleep(pause)
 
     spare = fallback_model()
-    if spare and spare != primary:
+    # The fallback is a second model and a second wait. Skipped once the
+    # budget is spent -- it is the step that turns a slow answer into a
+    # very slow one.
+    if spare and spare != primary and not out_of_time():
         try:
-            return _call_once(schema, system, user, max_tokens, spare)
+            remaining = None if deadline is None else max(
+                1.0, deadline - (time.monotonic() - started)
+            )
+            return _call_once(schema, system, user, max_tokens, spare, remaining)
         except Exception as exc:
             last = exc
 
@@ -198,8 +244,25 @@ def structured(
     raise LLMError(f"{primary} failed after {attempts} attempts: {last}")
 
 
-def _call_once(schema: Type[T], system: str, user: str, max_tokens: int, model: str) -> T:
+def _call_once(
+    schema: Type[T],
+    system: str,
+    user: str,
+    max_tokens: int,
+    model: str,
+    budget: float | None = None,
+) -> T:
+    """One request. `budget` caps how long it may take, end to end.
+
+    Without it the provider SDK applies its own retry schedule inside this
+    call -- two more attempts with backoff -- so a caller's deadline never
+    gets control and a rate-limited turn runs for over a minute whatever the
+    caller asked for. With a budget the SDK is told to try once and to give
+    up at a fixed time, and the decision comes back here where it belongs.
+    """
     client = _get_client()
+    if budget is not None:
+        client = client.with_options(max_retries=0, timeout=max(5.0, budget))
     _pace()
 
     if provider() == "anthropic":
