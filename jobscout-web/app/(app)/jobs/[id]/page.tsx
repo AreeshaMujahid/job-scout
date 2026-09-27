@@ -13,6 +13,7 @@ import { ApplicationChat } from "@/components/ApplicationChat";
 import { loadThread } from "@/app/actions/applicationChat";
 import { FollowUpPanel } from "@/components/FollowUpPanel";
 import { ReferralPanel } from "@/components/ReferralPanel";
+import { PostingDetail, QualificationPanel } from "@/components/PostingDetail";
 import { daysSince, scoreText, timeAgo, VERDICT, verdictOf } from "@/lib/score";
 
 export default async function JobDetailPage({ params }: PageProps<"/jobs/[id]">) {
@@ -113,37 +114,15 @@ export default async function JobDetailPage({ params }: PageProps<"/jobs/[id]">)
         </div>
       </section>
 
-      {/* Skills ------------------------------------------------------- */}
-      <section className="card mt-6 grid gap-6 p-6 sm:grid-cols-2">
-        <div>
-          <h2 className="text-sm font-semibold">They ask for, and you have</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {rating.matchedSkills.length ? (
-              rating.matchedSkills.map((skill) => (
-                <span key={skill} className="chip border-strong/30 bg-strong/10 text-strong">
-                  {skill}
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-ink-faint">Nothing listed.</span>
-            )}
-          </div>
-        </div>
-        <div>
-          <h2 className="text-sm font-semibold">They ask for, and you do not</h2>
-          <div className="mt-3 flex flex-wrap gap-2">
-            {rating.missingSkills.length ? (
-              rating.missingSkills.map((skill) => (
-                <span key={skill} className="chip">
-                  {skill}
-                </span>
-              ))
-            ) : (
-              <span className="text-sm text-ink-faint">Nothing obvious.</span>
-            )}
-          </div>
-        </div>
-      </section>
+      {/* What they ask for, against your CV ---------------------------
+          High on the page because it is the one panel about YOU against
+          this job rather than the employer describing it -- the rest of the
+          posting reads below, after the tools. */}
+      <QualificationPanel
+        description={job.description}
+        matchedSkills={rating.matchedSkills}
+        missingSkills={rating.missingSkills}
+      />
 
       {/* Pitch -------------------------------------------------------- */}
       {rating.pitch && (
@@ -204,25 +183,14 @@ export default async function JobDetailPage({ params }: PageProps<"/jobs/[id]">)
 
       <NoteBox jobId={job.id} initialNote={tracked?.note ?? ""} />
 
-      {/* The posting itself ------------------------------------------- */}
-      {job.description && (
-        <details className="card mt-6 p-6">
-          <summary className="cursor-pointer text-sm font-semibold">
-            The original posting
-          </summary>
-          <div className="mt-4 whitespace-pre-wrap text-sm leading-relaxed text-ink-soft">
-            {job.description.slice(0, 6000)}
-          </div>
-          <a
-            href={job.url}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="mt-4 inline-block text-sm font-semibold text-brand hover:underline"
-          >
-            Read it on {job.source} ↗
-          </a>
-        </details>
-      )}
+      {/* The rest of the posting -------------------------------------- */}
+      <PostingDetail
+        description={job.description}
+        url={job.url}
+        source={job.source}
+        matchedSkills={rating.matchedSkills}
+        missingSkills={rating.missingSkills}
+      />
     </div>
   );
 }

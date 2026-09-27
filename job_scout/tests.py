@@ -81,6 +81,131 @@ def test_an_unattributable_location_depends_on_who_filtered():
     assert not matches("France", "Barcelona, Catalonia, Spain", source_filtered=True)
 
 
+def test_relevance_reads_german_and_abbreviated_titles():
+    """A German board advertises "KI Engineer", not "AI Engineer".
+
+    KI is Kuenstliche Intelligenz. Measured on a real StepStone search for
+    four AI titles in Germany, the English-only matcher discarded the whole
+    German-language half of the board as though those postings were about
+    nothing -- including "AI Engineer / KI-Entwickler (m/w/d)", which says
+    it in both languages.
+    """
+    roles = ["data scientist", "machine learning engineer", "ai engineer"]
+
+    for title in [
+        "KI Engineer (m/w/d)",                        # AI, in German
+        "AI Engineer / KI-Entwickler (m/w/d)",        # both languages at once
+        "Senior ML Engineer (all genders)",           # initials for the phrase
+        "(Associate) Manager Data Science & AI",      # science, not scientist
+        "Data Scientist (m/w/d) - Computer Vision & KI",
+    ]:
+        assert relevance(title, [], "", roles) == 3, title
+
+
+def test_relevance_still_rejects_what_it_always_rejected():
+    """The aliases must widen the net, not tear a hole in it.
+
+    Each of these was correctly discarded before the German and abbreviation
+    aliases existed, and a table of synonyms is exactly the change that
+    quietly starts admitting everything.
+    """
+    roles = ["data scientist", "machine learning engineer", "ai engineer"]
+
+    for title in [
+        "IT Consultant - SAP Fiori / ABAP / User Experience (m/w/d)",
+        "Mitarbeiter Kundendatenmanagement (m/w/d)",
+        "Citizen Developer (w/m/div.)",
+        "Ingenieur (m/w/d) fuer Anomaliedetektion und Prozessanalytik",
+    ]:
+        assert relevance(title, [], "", roles) == 0, title
+
+
+def test_a_phrase_contraction_does_not_answer_the_whole_query():
+    """"ML" stands in for "machine learning" and for nothing else.
+
+    Striking a contracted phrase off the query must not strike off the words
+    around it, or "ML" alone would satisfy "machine learning engineer" and
+    every MLOps posting would arrive as an engineering vacancy.
+    """
+    assert relevance("ML Scientist", [], "", ["machine learning engineer"]) == 0
+    assert relevance("ML Engineer", [], "", ["machine learning engineer"]) == 3
+
+
+def test_german_study_routes_are_not_entry_level_jobs():
+    """A Duales Studium is a degree and an Abschlussarbeit is a thesis.
+
+    German boards list both beside real vacancies, and to an English eye they
+    read as junior roles -- so a search for Entry level returned university
+    places. They sit at Internship: excluded from an Entry level search,
+    still reachable by someone who wants them.
+    """
+    from .sources.seniority import level_of, matches
+
+    wanted = ["Entry level", "Associate"]
+    for title in [
+        "Duales Studium Informatik Schwerpunkt Data Science",
+        "Abschlussarbeit AI-Powered Transformation Office (m/w/d)",
+        "Ausbildung Fachinformatiker Anwendungsentwicklung",
+        "Masterarbeit Machine Learning (m/w/d)",
+    ]:
+        assert level_of(title) == "Internship", title
+        assert not matches(title, levels=wanted), title
+
+    # And the real entry-level jobs beside them are untouched.
+    for title in ["Junior Machine Learning Engineer (m/w/d)", "Data Scientist (m/w/d)"]:
+        assert matches(title, levels=wanted), title
+
+
+def test_a_human_check_is_told_apart_from_an_empty_result():
+    """Indeed shows a Cloudflare box instead of jobs, and the two look the
+    same from the code's side: no .job_seen_beacon either way.
+
+    They need opposite responses. An empty search should move on quietly; a
+    human check should wait, because the window is open on someone's screen
+    and a tick is all it needs. Before this the run gave up after twenty
+    seconds and reported "Indeed returned nothing", which sent the reader
+    off to widen their filters over a box nobody had clicked.
+    """
+    from .sources.boards import _challenged
+
+    class Page:
+        def __init__(self, selector=None, title=""):
+            self._selector, self._title = selector, title
+
+        def query_selector(self, _css):
+            return self._selector
+
+        def title(self):
+            return self._title
+
+    # The challenge's own furniture, whatever language it is written in.
+    assert _challenged(Page(selector=object()))
+    assert _challenged(Page(title="Just a moment..."))
+    assert _challenged(Page(title="Additional Verification Required"))
+
+    # A page that simply had no results is not a challenge.
+    assert not _challenged(Page(title="data scientist Jobs in Berlin | Indeed.com"))
+    assert not _challenged(Page(title=""))
+
+
+def test_a_page_that_throws_is_not_read_as_a_human_check():
+    """A closed or crashed page must not be mistaken for a challenge.
+
+    If it were, the run would sit and wait two minutes for someone to tick a
+    box on a window that is not there.
+    """
+    from .sources.boards import _challenged
+
+    class Broken:
+        def query_selector(self, _css):
+            raise RuntimeError("target closed")
+
+        def title(self):
+            raise RuntimeError("target closed")
+
+    assert not _challenged(Broken())
+
+
 def test_title_matching_accepts_the_same_job_under_another_name():
     """The bot's rule wanted every query word in the title, which threw away
     real postings: a search for "Senior Data Scientist" rejected "Data
@@ -966,15 +1091,18 @@ def test_scrape_reports_each_search_separately():
 
 
 def test_a_dead_board_does_not_end_the_search(monkeypatched_boards=None):
-    """One board raising must not lose the other five."""
+    """One board raising must not lose the others."""
     from .sources import boards as boards_module
 
     original = dict(boards_module.BOARDS)
 
-    def explode(queries, limit):
+    # Three arguments, because the pipeline now hands every board the
+    # location as well -- the ones that can search by place were previously
+    # asked for the whole country and filtered afterwards.
+    def explode(queries, limit, location=""):
         raise ConnectionError("board is down")
 
-    def works(queries, limit):
+    def works(queries, limit, location=""):
         return [Job(source="Good", title="Data Scientist", company="Acme",
                     url="https://example.com/1", location="Remote", remote=True)]
 
@@ -1002,7 +1130,9 @@ def test_llm_falls_back_when_the_primary_model_is_overloaded():
         strengths=[], gaps=[],
     )
 
-    def fake(schema, system, user, max_tokens, model):
+    # Six parameters: _call_once now takes a per-call time budget, so an
+    # interactive caller can bound a rate-limited turn.
+    def fake(schema, system, user, max_tokens, model, budget=None):
         calls.append(model)
         if model == llm_module.model_name():
             raise RuntimeError("Error code: 503 - model is currently experiencing high demand")
@@ -1070,7 +1200,9 @@ def test_a_non_retryable_error_fails_immediately():
     original = llm_module._call_once
     calls: list[str] = []
 
-    def fake(schema, system, user, max_tokens, model):
+    # Six parameters: _call_once now takes a per-call time budget, so an
+    # interactive caller can bound a rate-limited turn.
+    def fake(schema, system, user, max_tokens, model, budget=None):
         calls.append(model)
         raise RuntimeError("Error code: 401 - API key is invalid")
 
@@ -1564,6 +1696,245 @@ def test_a_genuine_footer_still_blocks_an_inserted_line():
         assert not room_for_a_line(d, 0, 12.0), (
             "a footer graphic is content and leaves no room below it"
         )
+
+
+def test_a_senior_title_never_survives_an_entry_level_search():
+    """The API boards have no seniority facet, so a search for entry-level
+    work came back full of Senior and Staff roles and the filter the user set
+    did nothing on that half of the app."""
+    from .sources.seniority import matches
+
+    wanted = ["Entry level", "Associate"]
+    for title in [
+        "Senior Data Scientist",
+        "Sr. Machine Learning Engineer",
+        "Staff Data Engineer",
+        "Lead Analytics Engineer",
+        "Principal Data Scientist",
+        "Head of Data Science",
+        "Data Scientist III",
+    ]:
+        assert not matches(title, levels=wanted), f"{title!r} is not entry level"
+
+
+def test_an_unmarked_title_is_kept_rather_than_guessed_at():
+    """A bare "Data Scientist" is genuinely open to two years' experience.
+    Dropping every title that does not announce its level would throw out most
+    of the market to remove a few bad matches, so silence is not evidence."""
+    from .sources.seniority import level_of, matches
+
+    assert level_of("Data Scientist") is None
+    assert matches("Data Scientist", levels=["Entry level"])
+    assert matches("Machine Learning Engineer", levels=["Entry level", "Associate"])
+
+
+def test_the_filter_cuts_both_ways():
+    """Somebody searching for senior roles should not be shown internships."""
+    from .sources.seniority import matches
+
+    assert not matches("Working Student Data Science", levels=["Mid-Senior level"])
+    assert not matches("Junior Data Analyst", levels=["Mid-Senior level"])
+    assert matches("Senior Data Scientist", levels=["Mid-Senior level"])
+
+
+def test_the_most_senior_marker_in_a_title_wins():
+    """A title carrying two markers is the more senior of them: a "Senior
+    Graduate Programme Lead" is not an entry-level job."""
+    from .sources.seniority import level_of
+
+    # "Senior" and "Lead" both sit at Mid-Senior; "Graduate" does not win
+    # just because it appears later in the string.
+    assert level_of("Senior Graduate Programme Lead") == "Mid-Senior level"
+    # "Head of" outranks both, so this is a Director role however junior the
+    # people it looks after.
+    assert level_of("Head of Junior Talent") == "Director"
+
+    from .sources.seniority import matches
+    assert not matches("Senior Graduate Programme Lead", levels=["Entry level"])
+
+
+def test_a_years_cap_reads_the_smallest_number_asked_for():
+    """A description wanting "2+ years of Python" and "5+ years in a regulated
+    industry" is open to someone with two -- the larger figure is usually a
+    nice-to-have further down the page. Taking the maximum turned postings
+    somebody qualified for into rejections."""
+    from .sources.seniority import matches, years_required
+
+    assert years_required("You have 2+ years of Python and 5+ years in banking") == 2
+    assert years_required("Minimum 7 years of experience required") == 7
+    assert years_required("A great place to work") is None
+    # Founded-in years and company ages are not requirements.
+    assert years_required("We have been building since 1998, over 27 years") is None
+
+    assert matches("Data Scientist", "Requires 8+ years of experience", max_years=3) is False
+    assert matches("Data Scientist", "Requires 2 years of experience", max_years=3) is True
+    # Nothing stated means nothing to reject on.
+    assert matches("Data Scientist", "A lovely team", max_years=3) is True
+
+
+def test_a_remote_job_that_names_a_country_is_remote_within_it():
+    """Remote used to bypass the location filter entirely, on the grounds
+    that location is the thing remote jobs do not care about. That is untrue
+    of most of them: "Remote - US" means remote on US payroll, in US hours,
+    with the right to work there. They were arriving at the top of a Germany
+    search, and they were the commonest bad match this app produced."""
+    from .sources._common import location_ok
+
+    for stated in ["Remote - US", "Remote (UK)", "Remote | CA", "Remote (Canada)"]:
+        assert not location_ok(stated, True, "Germany", False), stated
+
+    # The same postings are right for someone in that country.
+    assert location_ok("Remote - US", True, "United States", False)
+    assert location_ok("Remote - DE", True, "Germany", False)
+
+
+def test_a_remote_job_that_names_nowhere_is_still_kept():
+    """Rejecting on evidence, not on silence -- the same rule the seniority
+    filter follows. A posting that says only "Remote" means it."""
+    from .sources._common import location_ok
+
+    for open_to_all in ["Remote", "Worldwide", "Anywhere", ""]:
+        assert location_ok(open_to_all, True, "Germany", False), open_to_all
+
+
+def test_a_region_is_expanded_before_it_is_compared():
+    """"Remote, EMEA" and "Remote - Europe" both include Germany. Comparing
+    the words alone would drop them for naming neither Germany nor nothing."""
+    from .sources._common import location_ok
+
+    assert location_ok("Remote, EMEA", True, "Germany", False)
+    assert location_ok("Remote - Europe", True, "Germany", False)
+    assert not location_ok("Remote - Europe", True, "Canada", False)
+
+
+def test_a_two_letter_code_is_only_trusted_beside_a_remote_marker():
+    """"us", "in" and "it" are ordinary English words, so places.countries_in
+    refuses to read them as countries anywhere in a sentence. Directly after
+    "Remote" and a separator there is nothing else they can be, and that is
+    how half these postings write themselves."""
+    from .sources import places
+    from .sources._common import _remote_country_code
+
+    assert places.countries_in("Remote - US") == set()          # the general rule holds
+    assert _remote_country_code("Remote - US") == {"united states"}
+    # Not a country just because the letters appear somewhere.
+    assert _remote_country_code("Join us remotely from anywhere") == set()
+
+
+def test_an_undated_posting_is_not_a_stale_one():
+    """Boards write dates every way imaginable and several write none at all.
+    Treating an unparseable date as old would quietly discard whole boards."""
+    from datetime import date
+    from .sources.filters import age_in_days, fresh_enough
+
+    assert age_in_days("2026-09-18", date(2026, 9, 20)) == 2
+    assert age_in_days("18.09.2026", date(2026, 9, 20)) == 2
+    assert age_in_days("", date(2026, 9, 20)) is None
+    assert age_in_days("last Tuesday", date(2026, 9, 20)) is None
+
+    assert fresh_enough("", 7), "no date is not evidence of age"
+    assert fresh_enough("2026-09-18", None), "no window means no filtering"
+
+
+def test_a_salary_floor_reads_the_top_of_the_band():
+    """A posting advertising 55,000-75,000 is open to someone wanting 70,000.
+    Filtering on the bottom rejects the job they would be offered."""
+    from .sources.filters import pays_enough, salary_figures
+
+    assert salary_figures("EUR 55,000 - 75,000") == [75000, 55000]
+    assert salary_figures("60k - 80k") == [80000, 60000]
+    assert pays_enough("55,000 - 75,000", 70000)
+    assert not pays_enough("30,000 - 40,000", 70000)
+
+    # An hourly rate is not a salary, and reading it as one would hide
+    # contract work behind any floor at all.
+    assert salary_figures("EUR 65 per hour") == []
+    assert pays_enough("EUR 65 per hour", 70000)
+    # Saying nothing is not saying it pays badly.
+    assert pays_enough("Competitive salary", 70000)
+    assert pays_enough("", 70000)
+
+
+def test_a_blocked_employer_is_blocked_under_every_spelling():
+    """Agencies appear as "Acme GmbH", "ACME Recruitment Ltd." and "Acme" in
+    one afternoon. A blocklist matching one spelling gets abandoned."""
+    from .sources.filters import blocked
+
+    for spelling in ["Acme GmbH", "ACME Recruitment Ltd.", "acme", "Acme Solutions"]:
+        assert blocked(spelling, ["Acme"]), spelling
+    assert not blocked("Beacon Ltd", ["Acme"])
+    assert not blocked("Acme GmbH", [])
+
+
+def test_only_an_explicit_refusal_to_sponsor_counts():
+    """Most postings say nothing about visas. Treating silence as refusal
+    would hide almost the whole market from the people who most need it."""
+    from .sources.filters import open_to, refuses_sponsorship
+
+    for refusal in [
+        "We cannot sponsor visas",
+        "No visa sponsorship is available",
+        "Applicants must already have the right to work in Germany",
+        "EU citizens only",
+    ]:
+        assert refuses_sponsorship(refusal), refusal
+
+    for fine in [
+        "Visa sponsorship available",
+        "We support visa applications for the right candidate",
+        "A great team and a good pension",
+        "",
+    ]:
+        assert not refuses_sponsorship(fine), fine
+
+    # Someone who does not need sponsoring is never filtered by this.
+    assert open_to("We cannot sponsor visas", needs_sponsorship=False)
+    assert not open_to("We cannot sponsor visas", needs_sponsorship=True)
+
+
+def test_an_optional_board_is_absent_rather_than_broken():
+    """Adzuna needs a free key. Without one it should contribute nothing and
+    say nothing, the way the borrowed scrapers vanish when linkedin.py is
+    missing -- an optional source must not be able to fail a search."""
+    import os
+
+    from .sources.boards import adzuna
+
+    saved = (os.environ.pop("ADZUNA_APP_ID", None), os.environ.pop("ADZUNA_APP_KEY", None))
+    try:
+        assert adzuna(["Data Scientist"], 20) == []
+    finally:
+        if saved[0]:
+            os.environ["ADZUNA_APP_ID"] = saved[0]
+        if saved[1]:
+            os.environ["ADZUNA_APP_KEY"] = saved[1]
+
+
+def test_stepstone_relative_dates_become_real_ones():
+    """StepStone writes "vor 2 Tagen", and the freshness filter reads ISO
+    dates. Left untranslated every StepStone posting is undated -- kept, but
+    never filterable by age, which is most of what a job seeker sorts by."""
+    from datetime import datetime, timedelta, timezone
+
+    from .sources.boards import _stepstone_posted
+
+    today = datetime.now(timezone.utc).date()
+    assert _stepstone_posted("vor 2 Tagen") == (today - timedelta(days=2)).isoformat()
+    assert _stepstone_posted("vor 1 Tag") == (today - timedelta(days=1)).isoformat()
+    # Hours and minutes are today, not some number of days ago.
+    assert _stepstone_posted("vor 5 Stunden") == today.isoformat()
+    # Anything unrecognised is undated rather than wrongly dated.
+    assert _stepstone_posted("gestern") == ""
+    assert _stepstone_posted("") == ""
+
+
+def test_a_page_that_cannot_be_read_is_not_a_failed_search():
+    """get_html returns "" for any non-2xx rather than raising, so a board
+    behind a consent wall or a rate limit contributes nothing and the other
+    seven still answer."""
+    from .sources._common import get_html
+
+    assert get_html("https://www.stepstone.de/definitely-not-a-real-page-xyz") == ""
 
 
 def main() -> int:

@@ -11,15 +11,23 @@ export function SubmitButton({
   children,
   pendingText,
   className = "btn-primary",
+  disabled = false,
 }: {
   children: React.ReactNode;
   pendingText: string;
   className?: string;
+  /** For a form that cannot be submitted yet. The caller says why, nearby. */
+  disabled?: boolean;
 }) {
   const { pending } = useFormStatus();
 
   return (
-    <button type="submit" disabled={pending} className={className} aria-busy={pending}>
+    <button
+      type="submit"
+      disabled={pending || disabled}
+      className={className}
+      aria-busy={pending}
+    >
       {pending ? (
         <>
           <span

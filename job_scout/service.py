@@ -58,6 +58,7 @@ from .profile import build_profile
 from .rating import rate_jobs
 from .sources import BOARDS, fetch_all
 from .sources.scrapers import EXPERIENCE_LEVELS, IMPORT_ERROR, SCRAPERS, scrape
+from .sources.seniority import matches as level_matches
 
 app = FastAPI(title="job_scout", version="1.0.0")
 
@@ -110,6 +111,19 @@ class SearchRequest(BaseModel):
     boards: Optional[List[str]] = None
     min_relevance: int = 2
     limit: int = 40
+    # These two have no equivalent on the API boards, which return whatever
+    # matches the words. Applied here instead, from the title and the
+    # description -- see sources/seniority.py. Empty means no filtering, which
+    # is what every caller got before this existed.
+    experience_levels: List[str] = Field(default_factory=list)
+    max_years: Optional[int] = None
+    # Filters the boards cannot apply themselves -- see sources/filters.py.
+    # All optional, and all reject only on evidence: an undated posting is
+    # not stale, one stating no salary is not underpaid.
+    max_age_days: Optional[int] = None
+    min_salary: Optional[int] = None
+    blocked_companies: List[str] = Field(default_factory=list)
+    needs_sponsorship: bool = False
 
 
 class SearchResponse(BaseModel):
@@ -119,6 +133,18 @@ class SearchResponse(BaseModel):
     errors: dict = Field(default_factory=dict)
     duplicates: int = 0
     total_fetched: int = 0
+    # How many postings the seniority filter removed. Reported so the caller
+    # can say it out loud: a search that reads 800 postings and shows 12 looks
+    # broken unless the number that was filtered is visible.
+    filtered_by_level: int = 0
+    # The rest of the funnel, which fetch_all has always counted and nobody
+    # could see. On a one-title search these routinely account for 99% of what
+    # the boards returned -- without them, "846 postings read" followed by
+    # three results reads as a broken search rather than a narrow query.
+    off_topic: int = 0
+    wrong_location: int = 0
+    # Keyed by reason: stale / underpaid / blocked / no_sponsorship.
+    rejected: dict = Field(default_factory=dict)
 
 
 class ScrapeRequest(BaseModel):
@@ -320,7 +346,24 @@ class OutreachRequest(BaseModel):
 # ----------------------------------------------------------------- routes
 @app.get("/health")
 def health() -> dict:
-    return {"ok": True, "model": llm.model_name(), "provider": llm.provider()}
+    """Up, and able to do the job -- which are different questions.
+
+    `ok` was once hardcoded True, so a service with no API key reported
+    itself healthy and the only symptom was every rating failing one at a
+    time, several screens away. Anything watching this endpoint needs the
+    second question answered, not the first.
+    """
+    configured = llm.key_present()
+    return {
+        "ok": configured,
+        "model": llm.model_name(),
+        "provider": llm.provider(),
+        "detail": (
+            ""
+            if configured
+            else f"No API key for {llm.provider()}. Put it in job_scout/.env"
+        ),
+    }
 
 
 @app.get("/boards")
@@ -367,10 +410,40 @@ def search(request: SearchRequest) -> SearchResponse:
         remote_only=request.remote_only,
         boards=request.boards,
         min_relevance=request.min_relevance,
-        limit=request.limit,
+        # Fetch wider than asked for, because the level filter below removes
+        # postings after the fact. Without the headroom, a search capped at 40
+        # that is then filtered down to 12 looks like an empty job market.
+        limit=request.limit * 3 if (request.experience_levels or request.max_years) else request.limit,
+        max_age_days=request.max_age_days,
+        min_salary=request.min_salary,
+        blocked_companies=request.blocked_companies,
+        needs_sponsorship=request.needs_sponsorship,
     )
+
+    # The boards cannot filter on seniority, so it happens here. Only postings
+    # that SAY they are the wrong level are dropped; an unmarked title is
+    # ambiguous and kept -- see sources/seniority.py.
+    if request.experience_levels or request.max_years is not None:
+        before = len(jobs)
+        jobs = [
+            job
+            for job in jobs
+            if level_matches(
+                job.title,
+                job.description,
+                levels=request.experience_levels,
+                max_years=request.max_years,
+            )
+        ]
+        report.filtered_by_level = before - len(jobs)
+        jobs = jobs[: request.limit]
+
     return SearchResponse(
         jobs=[JobPayload.of(job) for job in jobs],
+        filtered_by_level=getattr(report, "filtered_by_level", 0),
+        off_topic=report.off_topic,
+        wrong_location=report.wrong_location,
+        rejected=report.rejected,
         fetched=report.fetched,
         kept=report.kept,
         errors=report.errors,

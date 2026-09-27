@@ -28,6 +28,11 @@ class Job:
     # reposting for an undisclosed client reads very differently from the
     # employer posting directly, and the company page is where you check.
     company_url: str = ""
+    # The employer's logo, when the board hands one over. Remotive and
+    # Jobicy do; LinkedIn, Xing and StepStone do not, and nothing here
+    # guesses one from the company name -- a logo belonging to a different
+    # company with a similar name is worse on a card than no logo at all.
+    logo: str = ""
     # Filled in by sources.fetch_all: 3 = the title matches a search
     # phrase, 1 = only the body does. Drives ordering before rating.
     relevance: int = 0

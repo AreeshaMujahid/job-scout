@@ -3,6 +3,11 @@
 .env
 .env.local
 .env.production
+# Every variant, not three named ones. A backup taken before a change --
+# .env.local.before-tunnel -- holds the same live keys as the file it
+# copied, and a throwaway .env.buildtest still reads as real configuration
+# to whoever clones this next. The .example negations below still win.
+.env.*
 *.key
 *.pem
 credentials.json
@@ -49,3 +54,11 @@ tsconfig.tsbuildinfo
 .vscode/
 .idea/
 .DS_Store
+
+# The LinkedIn browser session created by job_scout.linkedin_login. It is a
+# logged-in session; it belongs on one machine and nowhere near a repository.
+.pw-profile/
+# And any copy of it. Setting one aside before signing in as somebody else
+# leaves .pw-profile.real-account-<date>/ next to it, holding the same live
+# session cookies -- committing that publishes a working LinkedIn login.
+.pw-profile*

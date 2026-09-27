@@ -3,6 +3,7 @@
 import { revalidatePath } from "next/cache";
 import { and, eq } from "drizzle-orm";
 
+import { isAdmin } from "@/lib/auth/admin";
 import { requireUser } from "@/lib/auth/session";
 import { getDb } from "@/lib/db";
 import { jobs, ratings } from "@/lib/db/schema";
@@ -24,16 +25,27 @@ export type ReferralState =
   | { status: "error"; message: string };
 
 /**
- * Who the user could ask for a referral on one job.
+ * Who the owner could ask for a referral on one job.
  *
- * Reads the module LinkedIn already renders for this signed-in user on this
- * posting -- their own connections and school alumni -- and caches the
- * result against their rating row. Cached deliberately: every lookup drives
- * a signed-in browser at LinkedIn, so doing it once per job beats doing it
- * on every page view.
+ * Reads the module LinkedIn renders on the posting -- connections and school
+ * alumni -- and caches it against the rating row, because every lookup
+ * drives a browser at LinkedIn and once per job beats once per page view.
+ *
+ * OWNER ONLY, and for the same reason LinkedIn search is: the browser it
+ * drives is signed in as whoever owns the deployment, through the profile in
+ * .pw-profile. On a shared install this would show one person's connections
+ * to everybody, and send every visitor's lookup out through that person's
+ * account. The source check below is not enough on its own -- postings are
+ * shared between users, so "only LinkedIn jobs" is not "only the owner's".
  */
 export async function fetchReferralsAction(jobId: string): Promise<ReferralState> {
   const user = await requireUser();
+  if (!(await isAdmin())) {
+    return {
+      status: "error",
+      message: "Referral lookups are not available on this account.",
+    };
+  }
   const db = await getDb();
 
   const [row] = await db

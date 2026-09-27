@@ -64,6 +64,8 @@ export type ScoutJob = {
   salary: string;
   posted_at: string;
   company_url: string;
+  /** Only the boards that publish one: Remotive, Jobicy, RemoteOK. */
+  logo?: string;
   remote: boolean;
   relevance: number;
 };
@@ -83,6 +85,14 @@ export type ScoutRating = {
 };
 
 export type SearchResult = {
+  /** Postings dropped for stating a seniority outside the requested levels. */
+  filtered_by_level?: number;
+  /** Dropped because none of the search titles appeared in the posting. */
+  off_topic?: number;
+  /** Dropped because the location did not match. */
+  wrong_location?: number;
+  /** Dropped by a filter the boards cannot apply, keyed by reason. */
+  rejected?: Partial<Record<"stale" | "underpaid" | "blocked" | "no_sponsorship", number>>;
   jobs: ScoutJob[];
   fetched: Record<string, number>;
   kept: Record<string, number>;
@@ -196,7 +206,13 @@ async function call<T>(path: string, init: RequestInit, timeoutMs: number): Prom
   return (await response.json()) as T;
 }
 
-export async function scoutHealth(): Promise<{ ok: boolean; model: string; provider: string }> {
+export async function scoutHealth(): Promise<{
+  /** False when the service is running but has no API key -- see /health. */
+  ok: boolean;
+  model: string;
+  provider: string;
+  detail?: string;
+}> {
   return call("/health", { method: "GET" }, 5_000);
 }
 
@@ -263,6 +279,13 @@ export async function searchJobs(request: {
   boards?: string[] | null;
   min_relevance?: number;
   limit?: number;
+  /** The API boards have no level facet, so the service filters on the title. */
+  experience_levels?: string[];
+  max_years?: number | null;
+  max_age_days?: number | null;
+  min_salary?: number | null;
+  blocked_companies?: string[];
+  needs_sponsorship?: boolean;
 }): Promise<SearchResult> {
   return call<SearchResult>(
     "/search",

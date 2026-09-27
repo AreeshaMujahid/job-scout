@@ -102,6 +102,29 @@ _EXTRACT_JS = """() => {
 }"""
 
 
+def _friendly(exc: Exception) -> str:
+    """Turn a Playwright failure into something a person can act on.
+
+    Playwright's own message for a missing browser is six lines of box-drawing
+    characters wrapped around "playwright install", which arrives in the web
+    UI as a wall of broken glyphs and tells the reader nothing they can do
+    from where they are standing. The browser is an optional extra for this
+    feature alone, so its absence deserves one sentence and the command.
+    """
+    text = str(exc)
+    if "Executable doesn't exist" in text or "playwright install" in text:
+        return (
+            "Referral lookups need a browser, which is an optional extra. "
+            "Install it once with: python -m playwright install chromium"
+        )
+    # Everything else keeps its own message, minus the box drawing.
+    cleaned = " ".join(
+        part.strip()
+        for part in text.replace("║", " ").replace("═", " ").split()
+    )
+    return cleaned[:300]
+
+
 def fetch_referral_contacts(
     job_url: str,
     *,
@@ -132,8 +155,8 @@ def fetch_referral_contacts(
 
                 if "authwall" in page.url or "/login" in page.url:
                     raise RuntimeError(
-                        "The LinkedIn session is not signed in any more. Re-run: "
-                        "python auto_apply.py --login"
+                        "LinkedIn is not signed in. Sign in once with: "
+                        "python -m job_scout.linkedin_login"
                     )
 
                 result = page.evaluate(_EXTRACT_JS)
@@ -142,7 +165,7 @@ def fetch_referral_contacts(
     except RuntimeError:
         raise
     except Exception as exc:
-        raise RuntimeError(f"Could not read the posting's contacts: {exc}") from exc
+        raise RuntimeError(_friendly(exc)) from exc
 
     if not result.get("found"):
         return []
@@ -267,8 +290,8 @@ def fetch_company_people(
                 page.wait_for_timeout(6000)
                 if "authwall" in page.url or "/login" in page.url:
                     raise RuntimeError(
-                        "The LinkedIn session is not signed in any more. Re-run: "
-                        "python auto_apply.py --login"
+                        "LinkedIn is not signed in. Sign in once with: "
+                        "python -m job_scout.linkedin_login"
                     )
                 raw = page.evaluate(_COMPANY_PEOPLE_JS)
             finally:
@@ -276,7 +299,7 @@ def fetch_company_people(
     except RuntimeError:
         raise
     except Exception as exc:
-        raise RuntimeError(f"Could not read {company_url}: {exc}") from exc
+        raise RuntimeError(_friendly(exc)) from exc
 
     return _to_company_contacts(raw)[:limit]
 
@@ -401,8 +424,8 @@ def resolve_company_url(
                 page.wait_for_timeout(4500)
                 if "authwall" in page.url or "/login" in page.url:
                     raise RuntimeError(
-                        "The LinkedIn session is not signed in any more. Re-run: "
-                        "python auto_apply.py --login"
+                        "LinkedIn is not signed in. Sign in once with: "
+                        "python -m job_scout.linkedin_login"
                     )
                 results = page.evaluate(_COMPANY_SEARCH_JS)
             finally:

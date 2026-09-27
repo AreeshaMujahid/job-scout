@@ -270,6 +270,17 @@ for _city, _country in _CITY_COUNTRY.items():
 _SHORT_CODES = {code for code in _LOOKUP if len(code) == 2}
 
 
+def resolve_code(code: str) -> str | None:
+    """The country a two-letter code names, or None.
+
+    Exposed for callers that have established from context that a short code
+    really is a country -- see _common._remote_country_code. countries_in
+    itself still refuses to trust one found loose in a sentence.
+    """
+    code = code.strip().lower()
+    return _LOOKUP.get(code) if code in _SHORT_CODES else None
+
+
 def countries_in(text: str) -> Set[str]:
     """Which countries this location string names. Empty when it names none.
 

@@ -22,7 +22,13 @@ export const dynamic = "force-dynamic";
 async function scoutStatus(): Promise<{ ok: boolean; detail: string }> {
   try {
     const health = await scoutHealth();
-    return { ok: health.ok, detail: `${health.provider} · ${health.model}` };
+    // Reachable is not the same as working: the service answers with ok:false
+    // when it is running but has no API key, and that is the state worth
+    // shouting about -- every rating fails, several screens away from here.
+    return {
+      ok: health.ok,
+      detail: health.detail || `${health.provider} · ${health.model}`,
+    };
   } catch (error) {
     return { ok: false, detail: error instanceof Error ? error.message : "unreachable" };
   }
@@ -126,7 +132,7 @@ export default async function AdminOverview() {
             Rating service
           </p>
           <p className={`mt-1 font-semibold ${scout.ok ? "text-ink" : "text-danger"}`}>
-            {scout.ok ? "Up" : "Down"}
+            {scout.ok ? "Up" : "Not working"}
           </p>
           <p className="hint break-words">{scout.detail}</p>
         </div>

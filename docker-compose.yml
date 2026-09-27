@@ -78,6 +78,16 @@ services:
       SMTP_USER: ${SMTP_USER:-}
       SMTP_PASSWORD: ${SMTP_PASSWORD:-}
       MAIL_FROM: ${MAIL_FROM:-}
+      # Who may open /admin -- and, since sources that run on the owner's own
+      # logged-in browser are owner-only, who may search LinkedIn and Xing.
+      # Was set in .env and never passed through: the stack came up with the
+      # admin panel shut and the owner locked out of their own sources.
+      ADMIN_EMAILS: ${ADMIN_EMAILS:-}
+      # true lends the owner's logged-in browser sources (LinkedIn, Xing,
+      # Indeed) to every signed-in account. Off unless set: with it on,
+      # everyone's searches go out through one real LinkedIn account from one
+      # IP, and that account gets restricted. One line to turn back off.
+      SHARE_OWNER_SOURCES: ${SHARE_OWNER_SOURCES:-false}
     depends_on:
       db:
         condition: service_healthy

@@ -244,19 +244,52 @@ async function migrate(db: Database): Promise<void> {
     `CREATE INDEX IF NOT EXISTS chat_messages_thread_idx
        ON chat_messages (user_id, job_id, created_at)`,
 
+    // Search runs. Ratings made before runs existed get NULL, which the feed
+    // reads as "not from the current run" -- they stay reachable through the
+    // wider windows rather than disappearing.
+    `ALTER TABLE ratings ADD COLUMN IF NOT EXISTS run_id text`,
+    `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS last_run_id text`,
+    `CREATE INDEX IF NOT EXISTS ratings_run_idx ON ratings (user_id, run_id)`,
+
     // Columns added after the first release. CREATE TABLE IF NOT EXISTS does
     // nothing to a table that already exists, so new columns need saying out
     // loud. ADD COLUMN IF NOT EXISTS is idempotent, like everything above.
-    `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_board text NOT NULL DEFAULT 'LinkedIn'`,
+    `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_board text NOT NULL DEFAULT 'StepStone'`,
+    // Databases created before this default changed keep the old one, and a
+    // new account there would start on a source it may not use.
+    `ALTER TABLE profiles ALTER COLUMN search_board SET DEFAULT 'StepStone'`,
     `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_pages integer NOT NULL DEFAULT 3`,
     `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_hours integer NOT NULL DEFAULT 24`,
     `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_levels jsonb NOT NULL
        DEFAULT '["Entry level","Associate"]'::jsonb`,
     `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_max_years integer`,
+    // A run can span sources, and says how many postings it will score.
+    // search_board is left in place: it is the fallback for every profile
+    // saved before search_boards existed.
+    `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_boards jsonb NOT NULL
+       DEFAULT '[]'::jsonb`,
+    `ALTER TABLE profiles ADD COLUMN IF NOT EXISTS search_limit integer NOT NULL DEFAULT 30`,
+
+    // A run is a row so it can outlive the request that started it.
+    `CREATE TABLE IF NOT EXISTS runs (
+       id            text PRIMARY KEY,
+       user_id       text NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+       status        text NOT NULL DEFAULT 'running',
+       message       text NOT NULL DEFAULT '',
+       hint          text NOT NULL DEFAULT '',
+       stats         jsonb NOT NULL DEFAULT '[]'::jsonb,
+       target        integer NOT NULL DEFAULT 0,
+       scored        integer NOT NULL DEFAULT 0,
+       rediscovered  integer NOT NULL DEFAULT 0,
+       started_at    timestamptz NOT NULL DEFAULT now(),
+       finished_at   timestamptz
+     )`,
+    `CREATE INDEX IF NOT EXISTS runs_user_idx ON runs (user_id, started_at)`,
     // Added after the jobs table shipped, so existing databases need the
     // column added rather than the table recreated -- the CREATE above only
     // covers a fresh install.
     `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS company_url text NOT NULL DEFAULT ''`,
+    `ALTER TABLE jobs ADD COLUMN IF NOT EXISTS logo_url text NOT NULL DEFAULT ''`,
     `ALTER TABLE ratings ADD COLUMN IF NOT EXISTS cover_letter text NOT NULL DEFAULT ''`,
     `ALTER TABLE ratings ADD COLUMN IF NOT EXISTS cv_suggestions jsonb NOT NULL DEFAULT '[]'::jsonb`,
     `ALTER TABLE ratings ADD COLUMN IF NOT EXISTS cover_letter_at timestamptz`,

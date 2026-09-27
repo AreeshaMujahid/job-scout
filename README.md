@@ -33,8 +33,16 @@ pip install -r job_scout/requirements.txt
 python -m job_scout.service
 ```
 
-Referral lookups additionally need `playwright install chromium`; everything
-else runs without it.
+Referral lookups additionally need a browser, and a LinkedIn session:
+
+```bash
+python -m playwright install chromium
+python -m job_scout.linkedin_login
+```
+
+The second opens a browser window and waits while you sign in yourself --
+no credentials pass through this program. It keeps the session in
+`.pw-profile`, which is gitignored. Everything else runs without either.
 
 ```bash
 npm install --prefix jobscout-web
